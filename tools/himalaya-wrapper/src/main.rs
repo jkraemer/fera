@@ -31,6 +31,13 @@ const ALLOWED: &[(&str, &str)] = &[
     ("template", "save"),
 ];
 
+/// Safe IMAP flag values for `flag add` / `flag remove`.
+/// The `\Deleted` flag is intentionally excluded — it marks messages for
+/// permanent removal on EXPUNGE.
+const SAFE_FLAGS: &[&str] = &[
+    "seen", "answered", "flagged", "draft",
+];
+
 /// Extract the first two positional (non-flag) args from a himalaya argv.
 /// Skips global flags and their values. Returns None if fewer than two positionals found.
 fn find_command_subcommand<'a>(args: &[&'a str]) -> Option<(&'a str, &'a str)> {
@@ -71,9 +78,60 @@ fn find_command_subcommand<'a>(args: &[&'a str]) -> Option<(&'a str, &'a str)> {
     }
 }
 
+/// Collect all positional args (skipping global flags and their values).
+fn collect_positionals<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut positionals: Vec<&str> = Vec::new();
+    let mut skip_next = false;
+
+    for &arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--" {
+            break;
+        }
+        if arg.starts_with('-') {
+            if arg.contains('=') {
+                continue;
+            }
+            if FLAGS_WITH_VALUES.contains(&arg) {
+                skip_next = true;
+                continue;
+            }
+            continue;
+        }
+        positionals.push(arg);
+    }
+    positionals
+}
+
+/// For `flag add` / `flag remove`, verify all flag values are in SAFE_FLAGS.
+/// Positionals layout: ["flag", "add"|"remove", <id>, <flag1>, <flag2>, ...]
+fn flag_values_safe(positionals: &[&str]) -> bool {
+    // Need at least: command, subcommand, message-id, one flag
+    if positionals.len() < 4 {
+        return false;
+    }
+    for &flag_val in &positionals[3..] {
+        if !SAFE_FLAGS.contains(&flag_val.to_ascii_lowercase().as_str()) {
+            return false;
+        }
+    }
+    true
+}
+
 fn is_allowed(args: &[&str]) -> bool {
     match find_command_subcommand(args) {
-        Some((cmd, subcmd)) => ALLOWED.contains(&(cmd, subcmd)),
+        Some((cmd, subcmd)) => {
+            if !ALLOWED.contains(&(cmd, subcmd)) {
+                return false;
+            }
+            if cmd == "flag" {
+                return flag_values_safe(&collect_positionals(args));
+            }
+            true
+        }
         None => false,
     }
 }
@@ -195,13 +253,74 @@ mod tests {
     }
 
     #[test]
-    fn test_allowed_flag_add() {
+    fn test_allowed_flag_add_seen() {
         assert!(is_allowed(&["flag", "add", "42", "seen"]));
     }
 
     #[test]
-    fn test_allowed_flag_remove() {
+    fn test_allowed_flag_add_flagged() {
+        assert!(is_allowed(&["flag", "add", "42", "flagged"]));
+    }
+
+    #[test]
+    fn test_allowed_flag_add_answered() {
+        assert!(is_allowed(&["flag", "add", "42", "answered"]));
+    }
+
+    #[test]
+    fn test_allowed_flag_add_draft() {
+        assert!(is_allowed(&["flag", "add", "42", "draft"]));
+    }
+
+    #[test]
+    fn test_allowed_flag_add_multiple_safe() {
+        assert!(is_allowed(&["flag", "add", "42", "seen", "flagged"]));
+    }
+
+    #[test]
+    fn test_allowed_flag_add_case_insensitive() {
+        assert!(is_allowed(&["flag", "add", "42", "Seen"]));
+    }
+
+    #[test]
+    fn test_blocked_flag_add_deleted() {
+        assert!(!is_allowed(&["flag", "add", "42", "deleted"]));
+    }
+
+    #[test]
+    fn test_blocked_flag_add_deleted_case_insensitive() {
+        assert!(!is_allowed(&["flag", "add", "42", "Deleted"]));
+    }
+
+    #[test]
+    fn test_blocked_flag_add_deleted_mixed_with_safe() {
+        assert!(!is_allowed(&["flag", "add", "42", "seen", "deleted"]));
+    }
+
+    #[test]
+    fn test_blocked_flag_add_unknown_flag() {
+        assert!(!is_allowed(&["flag", "add", "42", "custom-flag"]));
+    }
+
+    #[test]
+    fn test_blocked_flag_add_no_flag_value() {
+        assert!(!is_allowed(&["flag", "add", "42"]));
+    }
+
+    #[test]
+    fn test_blocked_flag_remove_deleted() {
+        // Even removing deleted is blocked — no reason to interact with it
+        assert!(!is_allowed(&["flag", "remove", "42", "deleted"]));
+    }
+
+    #[test]
+    fn test_allowed_flag_remove_seen() {
         assert!(is_allowed(&["flag", "remove", "42", "seen"]));
+    }
+
+    #[test]
+    fn test_allowed_flag_remove_flagged() {
+        assert!(is_allowed(&["flag", "remove", "42", "flagged"]));
     }
 
     #[test]
