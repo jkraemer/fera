@@ -1,0 +1,27 @@
+# Himalaya config for himalaya user.
+# Copy to /home/himalaya/.config/himalaya/config.toml
+# Set ownership: chown himalaya:himalaya config.toml && chmod 600 config.toml
+# Do NOT configure message.send — SMTP sending is intentionally disabled.
+
+[accounts.default]
+email = "you@example.com"
+display-name = "Your Name"
+default = true
+
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Trash"
+
+# IMAP — read-only access
+backend.type = "imap"
+backend.host = "imap.example.com"
+backend.port = 993
+backend.encryption.type = "tls"
+backend.login = "you@example.com"
+backend.auth.type = "password"
+backend.auth.raw = "your-password"
+
+# Note: message.send backend is intentionally omitted.
+# himalaya-wrapper blocks all send/write/reply/forward commands at the wrapper level,
+# but omitting SMTP config adds a second layer of protection.

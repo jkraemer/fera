@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fera</title>
+  <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body class="bg-zinc-950 text-zinc-100 h-screen flex flex-col">
+  <header id="topbar" class="flex items-center gap-6 px-4 py-2 bg-zinc-900 border-b border-zinc-800 shrink-0">
+    <span class="font-bold text-lg">Fera</span>
+    <nav class="flex gap-1">
+      <button class="nav-tab px-3 py-1.5 text-sm rounded text-zinc-400 hover:text-white" data-view="chat">Chat</button>
+      <button class="nav-tab px-3 py-1.5 text-sm rounded text-zinc-400 hover:text-white" data-view="workspace">Files</button>
+      <button class="nav-tab px-3 py-1.5 text-sm rounded text-zinc-400 hover:text-white" data-view="mcp">MCP Servers</button>
+      <button class="nav-tab px-3 py-1.5 text-sm rounded text-zinc-400 hover:text-white" data-view="logs">Logs</button>
+      <button class="nav-tab px-3 py-1.5 text-sm rounded text-zinc-400 hover:text-white" data-view="status">Status</button>
+    </nav>
+  </header>
+  <div class="flex flex-1 overflow-hidden">
+    <nav id="sidebar" class="w-56 bg-zinc-900 border-r border-zinc-800 flex flex-col">
+      <div id="sidebar-content" class="flex-1 overflow-y-auto p-2"></div>
+    </nav>
+    <main id="content" class="flex-1 flex flex-col overflow-hidden"></main>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

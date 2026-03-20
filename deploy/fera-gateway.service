@@ -1,0 +1,20 @@
+[Unit]
+Description=Fera Gateway
+After=network.target fera-memory.service
+Requires=fera-memory.service
+
+[Service]
+Type=simple
+User=fera
+Environment=FERA_HOME=/home/fera
+EnvironmentFile=-/etc/fera/fera-gateway.env
+PassEnvironment=CLAUDE_CODE_OAUTH_TOKEN
+ExecStart=/opt/fera-venv/bin/fera-gateway
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+MemoryMax=4G
+MemorySwapMax=0
+
+[Install]
+WantedBy=multi-user.target

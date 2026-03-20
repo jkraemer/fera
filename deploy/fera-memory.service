@@ -1,0 +1,18 @@
+[Unit]
+Description=Fera Memory Server
+After=network.target
+
+[Service]
+Type=simple
+User=fera
+Environment=FERA_HOME=/home/fera
+EnvironmentFile=-/etc/fera/fera-memory.env
+PassEnvironment=ANTHROPIC_API_KEY
+ExecStart=/opt/fera-venv/bin/fera-memory-server
+Restart=on-failure
+RestartSec=5
+MemoryMax=512M
+MemorySwapMax=0
+
+[Install]
+WantedBy=multi-user.target

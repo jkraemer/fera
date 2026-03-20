@@ -1,0 +1,18 @@
+[Unit]
+Description=Fera Knowledge Base Indexer
+After=network.target
+
+[Service]
+Type=simple
+User=fera
+ExecStart=/opt/fera-venv/bin/fera-knowledge-indexer \
+    /home/fera/knowledge \
+    /home/fera/agents/librarian/knowledge
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fera-knowledge-indexer
+
+[Install]
+WantedBy=multi-user.target

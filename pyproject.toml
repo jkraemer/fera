@@ -1,0 +1,55 @@
+[project]
+name = "fera"
+version = "0.1.0"
+description = "Fera — a personal AI agent"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic",
+    "claude-agent-sdk",
+    "fastembed",
+    "faster-whisper",
+    "mistune",
+    "nh3",
+    "mattermostdriver>=7.3.2",
+    "python-telegram-bot",
+    "sqlite-vec",
+    "starlette",
+
+    "uvicorn",
+    "pypdf",
+    "watchdog",
+    "websockets",
+]
+
+[project.scripts]
+
+fera-create-agent = "fera.setup:main"
+fera-gateway = "fera.gateway.server:main"
+fera-memory-server = "fera.memory.server:run_server"
+fera-run-job = "fera.cron:main"
+fera-webui = "fera.webui.server:run_server"
+fera-knowledge-indexer = "fera.knowledge.daemon:main"
+fera-knowledge-ingest = "fera.knowledge.ingest:main"
+himalaya-safe = "fera.skills.himalaya.himalaya_safe:main"
+
+[dependency-groups]
+dev = [
+    "anyio[trio]",
+    "httpx",
+    "pytest",
+    "pytest-anyio",
+    "pytest-asyncio",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fera"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
