@@ -87,34 +87,48 @@ and update itself - this requires me doing `make deploy` from my machine.
 
 ---
 
-## 7. Environment Files
+## 7. Credentials
+
+Fera uses systemd's `LoadCredential=` mechanism for secrets. At service startup,
+systemd makes each secret available as a file in a tmpfs directory. The gateway
+reads them into memory immediately, then zeros and deletes the files. Secrets are
+never set as environment variables, so agent subprocesses cannot access them.
 
 Run `claude setup-token` locally to generate a long-lived OAuth token to be used
-by the the Agent SDK.
+by the Agent SDK.
 
-Create one or more telegram bots, you'll want to have one for each agent. Just
-define more env variables and reference them in the fera config where the agents
-are declared.
+Create a Telegram bot for the agent via [@BotFather](https://t.me/botfather).
 
 ```bash
-install -d -m 700 /etc/fera
+install -d -m 700 /etc/fera/credentials
 
+# Required — Claude Code OAuth token
+sudo sh -c 'echo -n "YOUR_TOKEN" > /etc/fera/credentials/claude-code-oauth-token'
 
-# fera-gateway.env — required: CLAUDE_CODE_OAUTH_TOKEN
-install -m 600 /dev/stdin /etc/fera/fera-gateway.env <<'EOF'
-CLAUDE_CODE_OAUTH_TOKEN=<your Claude Code OAuth token>
-# Optional Telegram integration:
-#TELEGRAM_BOT_TOKEN=<token>
-#TELEGRAM_ALLOWED_USER_ID=<your Telegram user ID>
-EOF
+# Optional — Anthropic API key (enables deep search in memory server)
+sudo sh -c 'echo -n "YOUR_KEY" > /etc/fera/credentials/anthropic-api-key'
 
+# Telegram bot token and allowed user ID
+sudo sh -c 'echo -n "TOKEN" > /etc/fera/credentials/telegram-bot-token'
+sudo sh -c 'echo -n "USER_ID" > /etc/fera/credentials/telegram-allowed-user-id'
 
-# fera-memory.env — set ANTHROPIC_API_KEY to enable deep memory search
-# (uses Haiku for query expansion only, so running costs are negligible)
-install -m 600 /dev/stdin /etc/fera/fera-memory.env <<'EOF'
-#ANTHROPIC_API_KEY=<your Anthropic API key>
-EOF
+# Mattermost token
+sudo sh -c 'echo -n "TOKEN" > /etc/fera/credentials/mattermost-main-token'
+
+# Lock down permissions
+sudo chmod 600 /etc/fera/credentials/*
+sudo chown root:root /etc/fera/credentials/*
 ```
+
+> **LXC containers:** systemd's `LoadCredential=` requires tmpfs mounts that
+> are not available inside LXC. The service will fail at startup with
+> `Failed to set up credentials: Protocol error` (exit 243). Run fera on a
+> real VM or bare-metal host, or replace `LoadCredential=` lines with
+> `EnvironmentFile=` and store secrets in env files instead.
+
+For local development without systemd, secrets can still be passed as environment
+variables — the code falls back to `os.environ` when `$CREDENTIALS_DIRECTORY` is
+not set.
 
 ---
 
@@ -133,10 +147,12 @@ After=network.target
 Type=simple
 User=fera
 Environment=FERA_HOME=/home/fera
-EnvironmentFile=-/etc/fera/fera-memory.env
+LoadCredential=ANTHROPIC_API_KEY:/etc/fera/credentials/anthropic-api-key
 ExecStart=/opt/fera-venv/bin/fera-memory-server
 Restart=on-failure
 RestartSec=5
+MemoryMax=512M
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
@@ -154,11 +170,16 @@ Requires=fera-memory.service
 Type=simple
 User=fera
 Environment=FERA_HOME=/home/fera
-EnvironmentFile=-/etc/fera/fera-gateway.env
+LoadCredential=CLAUDE_CODE_OAUTH_TOKEN:/etc/fera/credentials/claude-code-oauth-token
+LoadCredential=TELEGRAM_BOT_TOKEN:/etc/fera/credentials/telegram-bot-token
+LoadCredential=TELEGRAM_ALLOWED_USER_ID:/etc/fera/credentials/telegram-allowed-user-id
+LoadCredential=MATTERMOST_MAIN_TOKEN:/etc/fera/credentials/mattermost-main-token
 ExecStart=/opt/fera-venv/bin/fera-gateway
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45
+MemoryMax=4G
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
@@ -175,7 +196,6 @@ After=network.target fera-gateway.service
 Type=simple
 User=fera
 Environment=FERA_HOME=/home/fera
-EnvironmentFile=-/etc/fera/fera-webui.env
 ExecStart=/opt/fera-venv/bin/fera-webui
 Restart=on-failure
 RestartSec=5
@@ -253,8 +273,8 @@ EOF
 Replace `YOUR_TELEGRAM_USER_ID` with your numeric Telegram user ID (you can
 get it from [@userinfobot](https://t.me/userinfobot)).
 
-The `TELEGRAM_BOT_TOKEN` environment variable is already defined in
-`/etc/fera/fera-gateway.env` from step 7 — no duplication needed.
+The `TELEGRAM_BOT_TOKEN` credential file is already created in
+`/etc/fera/credentials/` from step 7 — no duplication needed.
 
 For the full list of config keys (MCP servers, per-agent overrides, web UI
 options, etc.) see the **Configuration** section in
@@ -361,12 +381,17 @@ This swaps `/opt/fera.bak` back into place, re-syncs the venv, and restarts serv
 
 ## Secrets Reference
 
-| Secret | Where used | Notes |
-|--------|-----------|-------|
-| `CLAUDE_CODE_OAUTH_TOKEN` | `/etc/fera/fera-gateway.env` | Required |
-| `ANTHROPIC_API_KEY` | `/etc/fera/fera-memory.env` | Optional (enables deep memory search) |
-| `TELEGRAM_BOT_TOKEN` | `/etc/fera/fera-gateway.env` | Optional |
-| `TELEGRAM_ALLOWED_USER_ID` | `/etc/fera/fera-gateway.env` | Optional |
+All secrets are stored as individual files in `/etc/fera/credentials/` and loaded
+via systemd's `LoadCredential=` mechanism. Secrets are never exposed as
+environment variables.
+
+| Credential file | Service | Notes |
+|----------------|---------|-------|
+| `claude-code-oauth-token` | gateway | Required |
+| `anthropic-api-key` | memory | Optional (enables deep memory search) |
+| `telegram-bot-token` | gateway | Optional |
+| `telegram-allowed-user-id` | gateway | Optional |
+| `mattermost-main-token` | gateway | Optional |
 
 ---
 

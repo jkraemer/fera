@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import re
 import secrets
@@ -10,14 +11,55 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
+log = logging.getLogger(__name__)
+
+_credentials: dict[str, str] = {}
+
+
+def load_all_credentials() -> dict[str, str]:
+    """Read all files from $CREDENTIALS_DIRECTORY into memory, then delete them.
+
+    Call once during service startup before any config loading.
+    Populates the module-level _credentials dict and returns it.
+    """
+    _credentials.clear()
+    creds_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not creds_dir:
+        return _credentials
+    creds_path = Path(creds_dir)
+    if not creds_path.is_dir():
+        return _credentials
+    for entry in creds_path.iterdir():
+        if not entry.is_file():
+            continue
+        try:
+            value = entry.read_text().strip()
+            _credentials[entry.name] = value
+            # Zero and delete immediately
+            size = entry.stat().st_size
+            entry.write_bytes(b"\x00" * size)
+            entry.unlink()
+        except OSError:
+            log.warning("Failed to load or clean up credential: %s", entry.name)
+    return _credentials
+
+
+def _resolve_var(name: str) -> str | None:
+    """Resolve a variable: credentials first, then os.environ."""
+    if name in _credentials:
+        return _credentials[name]
+    return os.environ.get(name)
+
+
+def _sub_match(m: re.Match) -> str:
+    """Substitution callback: resolve ${VAR} or keep placeholder."""
+    resolved = _resolve_var(m.group(1))
+    return resolved if resolved is not None else m.group(0)
 
 
 def substitute_text(text: str) -> str:
     """Apply ${VAR} substitution to raw text before JSON parsing."""
-    return _ENV_VAR_RE.sub(
-        lambda m: os.environ.get(m.group(1), m.group(0)),
-        text,
-    )
+    return _ENV_VAR_RE.sub(_sub_match, text)
 
 
 def load_json_config(path: Path) -> dict:
@@ -112,15 +154,13 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def substitute_env_vars(obj: object) -> object:
-    """Recursively substitute ${VAR} references with environment variable values.
+    """Recursively substitute ${VAR} references.
 
+    Checks credentials dict first, then environment variables.
     Unknown variables are left as-is.
     """
     if isinstance(obj, str):
-        return _ENV_VAR_RE.sub(
-            lambda m: os.environ.get(m.group(1), m.group(0)),
-            obj,
-        )
+        return _ENV_VAR_RE.sub(_sub_match, obj)
     if isinstance(obj, dict):
         return {k: substitute_env_vars(v) for k, v in obj.items()}
     if isinstance(obj, list):

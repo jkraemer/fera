@@ -7,7 +7,10 @@ Requires=fera-memory.service
 Type=simple
 User=fera
 Environment=FERA_HOME=/home/fera
-EnvironmentFile=-/etc/fera/fera-gateway.env
+LoadCredential=CLAUDE_CODE_OAUTH_TOKEN:/etc/fera/credentials/claude-code-oauth-token
+LoadCredential=TELEGRAM_BOT_TOKEN:/etc/fera/credentials/telegram-bot-token
+LoadCredential=TELEGRAM_ALLOWED_USER_ID:/etc/fera/credentials/telegram-allowed-user-id
+LoadCredential=MATTERMOST_MAIN_TOKEN:/etc/fera/credentials/mattermost-main-token
 ExecStart=/opt/fera-venv/bin/fera-gateway
 Restart=on-failure
 RestartSec=5

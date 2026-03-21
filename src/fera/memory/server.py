@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 
 from mcp.server import FastMCP
 from starlette.datastructures import QueryParams
@@ -136,9 +135,10 @@ def run_server():
 
     import uvicorn
 
-    from fera.config import AGENTS_DIR, load_config
+    from fera.config import AGENTS_DIR, _resolve_var, load_all_credentials, load_config
     from fera.memory.watcher import MemoryWatcher
 
+    load_all_credentials()
     logging.basicConfig(level=logging.INFO)
 
     config = load_config()
@@ -150,7 +150,7 @@ def run_server():
 
     expander = None
     reranker = None
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if _resolve_var("ANTHROPIC_API_KEY"):
         import anthropic
 
         from fera.memory.expander import HaikuQueryExpander

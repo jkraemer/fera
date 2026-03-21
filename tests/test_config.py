@@ -8,10 +8,11 @@ from fera.config import (
     load_config, DEFAULT_CONFIG, FERA_HOME,
     AGENTS_DIR, DEFAULT_AGENT,
     workspace_dir, data_dir,
-    load_agent_config, substitute_env_vars,
+    load_agent_config, substitute_env_vars, substitute_text,
     save_config, ensure_auth_token,
     load_cron_config,
     load_models, resolve_model,
+    load_all_credentials, _credentials, _resolve_var,
 )
 
 
@@ -376,3 +377,94 @@ def test_resolve_model_passthrough_unknown(tmp_path):
 def test_resolve_model_no_models_file_passthrough(tmp_path):
     from fera.config import resolve_model
     assert resolve_model("claude-opus-4-6", tmp_path) == "claude-opus-4-6"
+
+
+# --- load_all_credentials ---
+
+def test_load_all_credentials_reads_files_from_directory(tmp_path, monkeypatch):
+    (tmp_path / "SECRET_ONE").write_text("value-one")
+    (tmp_path / "SECRET_TWO").write_text("  value-two\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    creds = load_all_credentials()
+    assert creds["SECRET_ONE"] == "value-one"
+    assert creds["SECRET_TWO"] == "value-two"  # stripped
+
+
+def test_load_all_credentials_deletes_files_after_reading(tmp_path, monkeypatch):
+    secret_file = tmp_path / "MY_SECRET"
+    secret_file.write_text("secret-value")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    load_all_credentials()
+    assert not secret_file.exists()
+
+
+def test_load_all_credentials_returns_empty_without_creds_dir(monkeypatch):
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+    creds = load_all_credentials()
+    assert creds == {}
+
+
+def test_load_all_credentials_safe_when_directory_does_not_exist(tmp_path, monkeypatch):
+    non_existent = tmp_path / "does-not-exist"
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(non_existent))
+    creds = load_all_credentials()
+    assert creds == {}
+
+
+def test_load_all_credentials_populates_module_dict(tmp_path, monkeypatch):
+    (tmp_path / "TOKEN").write_text("tok123")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    load_all_credentials()
+    assert _credentials["TOKEN"] == "tok123"
+
+
+# --- _resolve_var ---
+
+def test_resolve_var_prefers_credentials_over_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    (tmp_path / "MY_VAR").write_text("from-creds")
+    load_all_credentials()
+    monkeypatch.setenv("MY_VAR", "from-env")
+    assert _resolve_var("MY_VAR") == "from-creds"
+
+
+def test_resolve_var_falls_back_to_env(monkeypatch):
+    # Clear credentials
+    monkeypatch.setattr("fera.config._credentials", {})
+    monkeypatch.setenv("FALLBACK_VAR", "env-value")
+    assert _resolve_var("FALLBACK_VAR") == "env-value"
+
+
+def test_resolve_var_returns_none_when_missing(monkeypatch):
+    monkeypatch.setattr("fera.config._credentials", {})
+    monkeypatch.delenv("GHOST_VAR", raising=False)
+    assert _resolve_var("GHOST_VAR") is None
+
+
+# --- substitute_text / substitute_env_vars: credentials integration ---
+
+def test_substitute_text_resolves_from_credentials(monkeypatch):
+    monkeypatch.setattr("fera.config._credentials", {"CRED_TOKEN": "cred-value"})
+    monkeypatch.delenv("CRED_TOKEN", raising=False)
+    result = substitute_text("Bearer ${CRED_TOKEN}")
+    assert result == "Bearer cred-value"
+
+
+def test_substitute_env_vars_resolves_from_credentials(monkeypatch):
+    monkeypatch.setattr("fera.config._credentials", {"API_KEY": "cred-key"})
+    monkeypatch.delenv("API_KEY", raising=False)
+    result = substitute_env_vars({"header": "${API_KEY}"})
+    assert result == {"header": "cred-key"}
+
+
+def test_substitute_text_credentials_override_env(monkeypatch):
+    monkeypatch.setattr("fera.config._credentials", {"DUAL": "from-cred"})
+    monkeypatch.setenv("DUAL", "from-env")
+    result = substitute_text("${DUAL}")
+    assert result == "from-cred"
+
+
+def test_substitute_text_empty_string_credential(monkeypatch):
+    monkeypatch.setattr("fera.config._credentials", {"EMPTY": ""})
+    result = substitute_text("prefix-${EMPTY}-suffix")
+    assert result == "prefix--suffix"

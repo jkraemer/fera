@@ -6,7 +6,6 @@ After=network.target fera-gateway.service
 Type=simple
 User=fera
 Environment=FERA_HOME=/home/fera
-EnvironmentFile=-/etc/fera/fera-webui.env
 ExecStart=/opt/fera-venv/bin/fera-webui
 Restart=on-failure
 RestartSec=5

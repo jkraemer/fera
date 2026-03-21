@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=fera
 Environment=FERA_HOME=/home/fera
-EnvironmentFile=-/etc/fera/fera-memory.env
+LoadCredential=ANTHROPIC_API_KEY:/etc/fera/credentials/anthropic-api-key
 ExecStart=/opt/fera-venv/bin/fera-memory-server
 Restart=on-failure
 RestartSec=5

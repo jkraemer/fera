@@ -918,6 +918,7 @@ def main():
     from fera.config import (
         DEFAULT_AGENT,
         AGENTS_DIR,
+        load_all_credentials,
         load_config,
         memory_url,
         substitute_env_vars,
@@ -925,6 +926,7 @@ def main():
     )
     from fera.setup import ensure_agent
 
+    load_all_credentials()
     enable_diagnostics()
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
