@@ -143,6 +143,7 @@ class AgentRunner:
         self._active_clients: dict[str, ClaudeSDKClient] = {}
         self._session_models: dict[str, str] = {}
         self._pending_questions: dict[str, asyncio.Future] = {}
+        self._question_events: dict[str, asyncio.Event] = {}
 
     def active_session(self, session_name: str) -> bool:
         """Check if a session has an active agent turn."""
@@ -174,11 +175,18 @@ class AgentRunner:
             fut = self._pending_questions.pop(qid)
             if not fut.done():
                 fut.cancel()
+        self._question_events.pop(session, None)
 
     def _has_pending_questions(self, session_name: str) -> bool:
         """Check if any AskUserQuestion Futures are pending for a session."""
         prefix = session_name + ":"
         return any(qid.startswith(prefix) for qid in self._pending_questions)
+
+    def _question_event(self, session_name: str) -> asyncio.Event:
+        """Get or create an asyncio.Event for question-registered signals."""
+        if session_name not in self._question_events:
+            self._question_events[session_name] = asyncio.Event()
+        return self._question_events[session_name]
 
     def _build_can_use_tool(self, session_name: str):
         """Build a can_use_tool callback for a session.
@@ -194,6 +202,7 @@ class AgentRunner:
             question_id = f"{session_name}:{uuid4()}"
             fut = asyncio.get_event_loop().create_future()
             self._pending_questions[question_id] = fut
+            self._question_event(session_name).set()
 
             if self._bus:
                 await self._bus.publish(make_event(
@@ -299,6 +308,64 @@ class AgentRunner:
             )
         return count
 
+    async def _wait_for_message_or_question(
+        self, msg_iter, session_name: str, inactivity_timeout: float,
+    ):
+        """Wait for the next SDK message, re-evaluating timeout if a question arrives.
+
+        Races the message iterator against the session's question event.
+        If the event fires (meaning _can_use_tool just registered a question),
+        clears the event and restarts the wait with QUESTION_INACTIVITY_TIMEOUT.
+        """
+        question_ev = self._question_event(session_name)
+
+        # Fast path: question already pending
+        if self._has_pending_questions(session_name):
+            return await asyncio.wait_for(
+                msg_iter.__anext__(), timeout=QUESTION_INACTIVITY_TIMEOUT,
+            )
+
+        # Race: wait for either the next message or the question event
+        msg_task = asyncio.ensure_future(msg_iter.__anext__())
+        event_task = asyncio.ensure_future(question_ev.wait())
+
+        try:
+            done, _ = await asyncio.wait(
+                {msg_task, event_task},
+                timeout=inactivity_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            msg_task.cancel()
+            event_task.cancel()
+            raise
+
+        if not done:
+            # Neither completed — true inactivity timeout
+            msg_task.cancel()
+            event_task.cancel()
+            # Await cancellation so the async generator is released before aclose()
+            try:
+                await msg_task
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
+            raise asyncio.TimeoutError()
+
+        if msg_task in done:
+            event_task.cancel()
+            return msg_task.result()
+
+        # Question event fired — clear it and wait for the message with long timeout
+        event_task.cancel()
+        question_ev.clear()
+        try:
+            return await asyncio.wait_for(
+                msg_task, timeout=QUESTION_INACTIVITY_TIMEOUT,
+            )
+        except BaseException:
+            msg_task.cancel()
+            raise
+
     async def _drain_response(
         self, client, session_name: str, canary_token: str | None = None,
         inactivity_timeout: float = RESPONSE_INACTIVITY_TIMEOUT,
@@ -325,13 +392,8 @@ class AgentRunner:
         try:
             while True:
                 try:
-                    effective_timeout = (
-                        QUESTION_INACTIVITY_TIMEOUT
-                        if self._has_pending_questions(session_name)
-                        else inactivity_timeout
-                    )
-                    msg = await asyncio.wait_for(
-                        msg_iter.__anext__(), timeout=effective_timeout,
+                    msg = await self._wait_for_message_or_question(
+                        msg_iter, session_name, inactivity_timeout,
                     )
                 except StopAsyncIteration:
                     return
@@ -597,6 +659,7 @@ class AgentRunner:
             async for event in self._drain_response(client, session_name, canary_token=canary_token):
                 yield event
         except Exception:
+            self.cancel_pending_questions(session_name)
             await self._pool.release(session_name)
             raise
         finally:
@@ -685,6 +748,7 @@ class AgentRunner:
                 async for event in self._drain_response(client, session_name, canary_token=canary_token):
                     yield event
             finally:
+                self.cancel_pending_questions(session_name)
                 self._active_clients.pop(session_name, None)
 
     async def run_oneshot(

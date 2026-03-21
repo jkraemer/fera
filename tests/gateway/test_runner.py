@@ -1424,6 +1424,23 @@ async def test_cancel_pending_questions_cancels_for_session(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cancel_pending_questions_cleans_up_event(tmp_path):
+    """cancel_pending_questions removes the session's question event."""
+    runner = _make_runner(tmp_path)
+
+    # Create the event
+    event = runner._question_event("main/default")
+    event.set()
+
+    # Add and cancel a question
+    fut = asyncio.get_event_loop().create_future()
+    runner._pending_questions["main/default:q1"] = fut
+    runner.cancel_pending_questions("main/default")
+
+    assert "main/default" not in runner._question_events
+
+
+@pytest.mark.asyncio
 async def test_clear_session_cancels_pending_questions(tmp_path):
     sessions_file = tmp_path / "data" / "sessions.json"
     sessions_file.parent.mkdir(parents=True)
@@ -1472,6 +1489,57 @@ def test_has_pending_questions_false_for_other_session(tmp_path):
     runner = _make_runner(tmp_path)
     runner._pending_questions["main/dm-alex:abc-123"] = object()
     assert runner._has_pending_questions("coding/dm-alex") is False
+
+
+def test_question_event_creates_lazily(tmp_path):
+    """_question_event creates an Event on first access for a session."""
+    runner = _make_runner(tmp_path)
+    event = runner._question_event("test/session")
+    assert isinstance(event, asyncio.Event)
+    assert not event.is_set()
+    # Same session returns the same event
+    assert runner._question_event("test/session") is event
+
+
+def test_question_event_different_sessions(tmp_path):
+    """Different sessions get different events."""
+    runner = _make_runner(tmp_path)
+    e1 = runner._question_event("session/a")
+    e2 = runner._question_event("session/b")
+    assert e1 is not e2
+
+
+@pytest.mark.asyncio
+async def test_can_use_tool_sets_question_event(tmp_path):
+    """_can_use_tool sets the session's question event when AskUserQuestion fires."""
+    from fera.gateway.protocol import make_event
+
+    received = []
+
+    class FakeBus:
+        async def publish(self, event):
+            received.append(event)
+
+    sessions_file = tmp_path / "data" / "sessions.json"
+    sessions_file.parent.mkdir(parents=True)
+    (tmp_path / "agents" / "main" / "workspace").mkdir(parents=True)
+    sessions = SessionManager(sessions_file, fera_home=tmp_path)
+    sessions.create("default", agent="main")
+    runner = AgentRunner(sessions=sessions, lanes=LaneManager(), bus=FakeBus())
+
+    event = runner._question_event("main/default")
+    assert not event.is_set()
+
+    callback = runner._build_can_use_tool("main/default")
+    # Start the callback but don't await it (it blocks on the Future)
+    task = asyncio.create_task(callback("AskUserQuestion", {"questions": []}, None))
+    await asyncio.sleep(0.01)
+
+    assert event.is_set(), "Question event should be set after AskUserQuestion registers"
+
+    # Clean up: cancel the pending question so the task finishes
+    runner.cancel_pending_questions("main/default")
+    await task
 
 
 @pytest.mark.asyncio
@@ -2347,6 +2415,60 @@ async def test_drain_response_no_timeout_when_question_pending(tmp_path):
     assert not drain_task.done(), "Drain timed out despite pending question"
 
     # "Answer" the question to unblock the client
+    responded.set()
+    await drain_task
+
+    assert any(e["event"] == "agent.text" for e in events)
+    assert any(e["event"] == "agent.done" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_drain_response_no_timeout_when_question_registered_mid_wait(tmp_path):
+    """Question registered AFTER _drain_response starts waiting must prevent timeout.
+
+    This is the race condition: _drain_response checks _has_pending_questions,
+    finds none, commits to 300s timeout. Meanwhile _can_use_tool registers
+    the question concurrently. Without the fix, the 300s timeout fires.
+    """
+
+    responded = asyncio.Event()
+
+    class DelayedQuestionClient:
+        async def receive_messages(self):
+            # Simulate SDK blocked in can_use_tool — no messages until answered
+            await asyncio.wait_for(responded.wait(), timeout=5.0)
+            yield _make_assistant_message([{"type": "text", "text": "Got answer!"}])
+            yield _sdk_result()
+
+    sessions = SessionManager(tmp_path / "sessions.json")
+    sessions.get_or_create("test/session")
+    runner = AgentRunner(sessions, LaneManager(), fera_home=tmp_path)
+
+    # NO pre-registered question — this is the race scenario
+    events = []
+
+    async def drain():
+        async for event in runner._drain_response(
+            DelayedQuestionClient(), "test/session",
+            inactivity_timeout=0.2,  # Would fire quickly without the fix
+        ):
+            events.append(event)
+
+    drain_task = asyncio.create_task(drain())
+
+    # Let _drain_response start its wait with the short timeout
+    await asyncio.sleep(0.05)
+
+    # NOW register the question (simulating the concurrent _can_use_tool callback)
+    fut = asyncio.get_event_loop().create_future()
+    runner._pending_questions["test/session:q-late"] = fut
+    runner._question_event("test/session").set()
+
+    # Wait longer than inactivity_timeout — should NOT time out
+    await asyncio.sleep(0.4)
+    assert not drain_task.done(), "Drain timed out despite question registered mid-wait"
+
+    # Unblock the client
     responded.set()
     await drain_task
 
