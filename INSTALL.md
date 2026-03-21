@@ -134,7 +134,6 @@ Type=simple
 User=fera
 Environment=FERA_HOME=/home/fera
 EnvironmentFile=-/etc/fera/fera-memory.env
-PassEnvironment=ANTHROPIC_API_KEY
 ExecStart=/opt/fera-venv/bin/fera-memory-server
 Restart=on-failure
 RestartSec=5
@@ -156,7 +155,6 @@ Type=simple
 User=fera
 Environment=FERA_HOME=/home/fera
 EnvironmentFile=-/etc/fera/fera-gateway.env
-PassEnvironment=CLAUDE_CODE_OAUTH_TOKEN
 ExecStart=/opt/fera-venv/bin/fera-gateway
 Restart=on-failure
 RestartSec=5
