@@ -482,30 +482,49 @@ class AgentRunner:
             return
 
         async with self._lanes.acquire(session_name):
-            async for event in self._execute_turn(
-                session_name, text, source,
-                prompt_mode=prompt_mode, model=model,
-                allowed_tools=allowed_tools,
-                agents=agents,
-                fork_from=fork_from,
-            ):
-                yield event
-
-            # Drain queued messages and run combined follow-up turns
-            while queued := self._lanes.drain_queue(session_name):
-                combined = "\n".join(t for t, _ in queued)
-                q_source = queued[0][1]
-                log.info(
-                    "Processing %d queued message(s) for %s",
-                    len(queued), session_name,
-                )
+            try:
                 async for event in self._execute_turn(
-                    session_name, combined, q_source,
+                    session_name, text, source,
                     prompt_mode=prompt_mode, model=model,
                     allowed_tools=allowed_tools,
                     agents=agents,
+                    fork_from=fork_from,
                 ):
                     yield event
+
+                # Drain queued messages and run combined follow-up turns
+                while queued := self._lanes.drain_queue(session_name):
+                    combined = "\n".join(t for t, _ in queued)
+                    q_source = queued[0][1]
+                    log.info(
+                        "Processing %d queued message(s) for %s",
+                        len(queued), session_name,
+                    )
+                    async for event in self._execute_turn(
+                        session_name, combined, q_source,
+                        prompt_mode=prompt_mode, model=model,
+                        allowed_tools=allowed_tools,
+                        agents=agents,
+                    ):
+                        yield event
+            except Exception as e:
+                # Safety net: log turn.error even if _execute_turn's own
+                # except block didn't fire (async generator exception
+                # propagation is fragile — see #1428).
+                if logger := get_logger():
+                    try:
+                        await logger.log(
+                            "turn.error", level="error",
+                            session=session_name, error=str(e),
+                        )
+                    except Exception:
+                        log.exception("Failed to log turn.error for %s", session_name)
+                raise
+            finally:
+                # Guarantee cleanup even if nested generators didn't
+                # execute their own finally blocks (see #1428).
+                self.cancel_pending_questions(session_name)
+                self._active_clients.pop(session_name, None)
 
     async def _execute_turn(
         self, session_name: str, text: str, source: str = "",
@@ -630,10 +649,6 @@ class AgentRunner:
                     event["turn_source"] = source
                 await _log_event(event)
                 yield event
-        except Exception as e:
-            if logger := get_logger():
-                await logger.log("turn.error", level="error", session=session_name, error=str(e))
-            raise
 
     async def _run_turn_pooled(
         self, session_name: str, text: str, sdk_session_id: str | None,

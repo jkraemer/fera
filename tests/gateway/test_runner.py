@@ -2593,3 +2593,72 @@ async def test_execute_turn_no_fork_when_parent_has_no_sdk_id(tmp_path):
 
     assert captured_args["sdk_session_id"] is None
     assert captured_args["fork_session"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_turn_cancels_pending_questions_on_error(tmp_path):
+    """Pending AskUserQuestion futures must be cancelled when a turn fails.
+
+    Even if the exception path through nested async generators prevents
+    _execute_turn's cleanup from running, run_turn's safety net
+    must guarantee cleanup. Regression test for #1428.
+    """
+    runner = _make_runner(tmp_path)
+
+    # Register a pending question
+    fut = asyncio.get_event_loop().create_future()
+    runner._pending_questions["main:q-pending"] = fut
+
+    async def failing_ephemeral(session, text, sdk_session_id, prompt_mode="full",
+                                 model=None, allowed_tools=None, agents=None,
+                                 fork_session=False):
+        raise RuntimeError("connection lost")
+        yield  # make it a generator  # noqa: unreachable
+
+    with patch.object(runner, "_run_turn_ephemeral", side_effect=failing_ephemeral):
+        with pytest.raises(RuntimeError):
+            async for _ in runner.run_turn("main", "hello"):
+                pass
+
+    assert fut.cancelled(), "Pending question was not cancelled after turn error"
+    assert "main:q-pending" not in runner._pending_questions
+
+
+@pytest.mark.asyncio
+async def test_run_turn_logs_exactly_one_turn_error(tmp_path):
+    """A single failure should produce exactly one turn.error, not duplicates.
+
+    With the safety net in run_turn AND the existing except in _execute_turn,
+    we'd get two turn.error events. After cleanup, only run_turn logs it.
+    """
+    import fera.logger as logger_mod
+    from fera.logger import init_logger
+
+    logger_mod._logger = None
+    logger = init_logger(tmp_path / "logs")
+    logged = []
+
+    async def cb(entry):
+        logged.append(entry)
+
+    logger.set_broadcast(cb)
+    try:
+        runner = _make_runner(tmp_path)
+
+        async def failing_ephemeral(session, text, sdk_session_id, prompt_mode="full",
+                                     model=None, allowed_tools=None, agents=None,
+                                     fork_session=False):
+            raise RuntimeError("single failure")
+            yield  # noqa: unreachable
+
+        with patch.object(runner, "_run_turn_ephemeral", side_effect=failing_ephemeral):
+            with pytest.raises(RuntimeError):
+                async for _ in runner.run_turn("main", "hello"):
+                    pass
+
+        error_events = [e for e in logged if e["event"] == "turn.error"]
+        assert len(error_events) == 1, (
+            f"Expected exactly 1 turn.error, got {len(error_events)}: {error_events}"
+        )
+    finally:
+        logger_mod._logger = None
